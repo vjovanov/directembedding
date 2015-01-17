@@ -4,12 +4,13 @@ import ch.epfl.directembedding._
 
 // Intermediate Representation
 trait Exp[T]
+case class Const[T](x: T) extends Exp[T]
+
 case object ValDef extends Exp[Int]
 case object NoArgs extends Exp[Int]
 case class JustTargs[T, U]() extends Exp[(T, U)]
 case class JustArgs(x: Exp[Int]) extends Exp[Int]
 case class ArgsAndTArgs[T, U](t: Exp[T], u: Exp[U]) extends Exp[(T, U)]
-case class Const[T](x: T) extends Exp[T]
 
 case class Size[T](self: Exp[TArgClassExampleCase[T]]) extends Exp[Int]
 case class Take[T](self: Exp[TArgClassExampleCase[T]], n: Exp[Int]) extends Exp[TArgClassExample[T]]

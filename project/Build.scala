@@ -62,7 +62,8 @@ object DirectEmbeddingBuild extends Build {
     // sbteclipse needs some info on source directories:
     unmanagedSourceDirectories in Compile <<= (scalaSource in Compile)(Seq(_)),
     unmanagedSourceDirectories in Test <<= (scalaSource in Test)(Seq(_)),
-    parallelExecution in Test := false
+    parallelExecution in Test := false,
+    traceLevel in Test := 40
   )
 
   lazy val website = Seq(site.settings,

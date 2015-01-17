@@ -37,17 +37,19 @@ protected[directembedding] object Macros {
     }"""
   }
 
-  def lift[T](c: Context)(block: c.Expr[T]): c.Expr[T] = {
+  /**
+   * Transforms methods to their domain-specific IR specified by
+   * `reifyAs` annotations.
+   */
+  class ReificationTransformer[C <: Context](val c: C) {
     import c.universe._
-    /**
-     * Transforms methods to their domain-specific IR specified by
-     * `reifyAt` annotations.
-     */
-    class LiftingTransformer extends Transformer {
+
+    private object InnerTransformer extends Transformer {
       def reify(methodSym: Symbol, targs: List[Tree], args: List[Tree]): Tree = {
         val reifyAsAnnot = methodSym.annotations.filter(_.tree.tpe <:< c.typeOf[reifyAs]).head
         val body = reifyAsAnnot.tree.children.tail.head
 
+        // Reify application
         (targs, args) match {
           case (Nil, Nil)    => body
           case (targs, Nil)  => q"${body}.apply[..$targs]"
@@ -56,26 +58,24 @@ protected[directembedding] object Macros {
         }
       }
 
-      def getAnnot(field: Select): Symbol = {
-        val symbolAnnotations = field.symbol.annotations.filter(_.tree.tpe <:< c.typeOf[reifyAs])
-        val fieldOrGetterSym = if (symbolAnnotations.isEmpty)
-          // unfortunately the annotation goes only to the getter
-          field.symbol.owner.info.members.filter(x => x.name.toString == field.symbol.name + " ").head
-        else field.symbol
+      def getAnnot(field: Select): Symbol = annotOption(field).get
+      def annotOption(field: Select): Option[Symbol] = {
+        val symbolAnnotations =
+          field.symbol.annotations.filter(_.tree.tpe <:< c.typeOf[reifyAs])
+        val fieldOrGetterSym = if (symbolAnnotations.isEmpty) {
+          val vals = field.symbol.owner.info.members.filter(x => x.name.toString == field.symbol.name + " ")
+          if (vals.isEmpty) None else Some(vals.head)
+        } else Some(field.symbol)
 
         fieldOrGetterSym
       }
 
-      def getSelf(x: Tree): List[Tree] = x match {
-        case Select(_, _) => Nil
-        case _ =>
-          if (x.symbol.isModule) {
-            Nil
-
-          } else {
-            List(transform(x))
-          }
-      }
+      def getSelf(x: Tree): List[Tree] =
+        if (x.symbol.isModule) {
+          Nil
+        } else {
+          List(transform(x))
+        }
 
       def traverserHelper(t: Tree, args: List[Tree]): Tree = t match {
         case field @ Apply(x, y) =>
@@ -97,7 +97,7 @@ protected[directembedding] object Macros {
           case Apply(field @ Select(x, y), args) =>
             val fieldOrGetterSym = getAnnot(field)
             val self = getSelf(x)
-            reify(fieldOrGetterSym, x.tpe.typeArgs.map(TypeTree(_)), self ::: args)
+            reify(fieldOrGetterSym, x.tpe.typeArgs.map(TypeTree(_)), self ::: args.map(transform(_)))
 
           case Apply(TypeApply(field @ Select(x, y), targs), args) =>
             val fieldOrGetterSym = getAnnot(field)
@@ -110,18 +110,20 @@ protected[directembedding] object Macros {
             reify(fieldOrGetterSym, x.tpe.typeArgs.map(TypeTree(_)) ::: targs.map(transform(_)), self)
 
           case field @ Select(x, y) =>
-            val fieldOrGetterSym = getAnnot(field)
-            val self = getSelf(x)
-            reify(fieldOrGetterSym, x.tpe.typeArgs.map(TypeTree(_)), self)
+            val fieldOrGetterSym = annotOption(field)
+            if (fieldOrGetterSym.isEmpty) {
+              q"Apply(${field.symbol.toString}, Nil)" // virtualization of application (TODO make configurable)
+            } else {
+              val self = getSelf(x)
+              reify(fieldOrGetterSym.get, x.tpe.typeArgs.map(TypeTree(_)), self)
+            }
 
           case x =>
             super.transform(tree)
         }
       }
     }
-
-    val reified = new LiftingTransformer().transform(block.tree)
-    c.Expr[T](q"_root_.ch.epfl.directembedding.test.compile($reified)")
+    def transform(tree: Tree): Tree = InnerTransformer.transform(tree)
   }
 
   def extractMethodTree(c: Context)(x: c.Expr[Any]): c.Expr[MethodTree] = {
@@ -159,4 +161,9 @@ protected[directembedding] object Macros {
     c.Expr(q"new MethodTree({$defTree})")
   }
 
+  def lift[T](c: Context)(block: c.Expr[T]): c.Expr[T] = {
+    import c.universe._
+    val reified = new ReificationTransformer[c.type](c).transform(block.tree)
+    c.Expr[T](q"_root_.ch.epfl.directembedding.test.compile($reified)")
+  }
 }
